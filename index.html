@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>เกมเป่า ยิง ฉุบ</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
+    <style>
+        body { text-align: center; font-family: Arial, sans-serif; }
+        video { border: 2px solid black; }
+        #countdown { font-size: 30px; font-weight: bold; color: red; margin-top: 10px; }
+        #result-box { font-size: 24px; font-weight: bold; margin-top: 20px; color: green; }
+        #player-choice, #computer-choice { font-size: 20px; margin: 10px; }
+        #restart-button { margin-top: 20px; padding: 10px 20px; font-size: 16px; cursor: pointer; background: #ff6666; color: white; border: none; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>เกมเป่า ยิง ฉุบ</h1>
+    <video id="video" width="640" height="480" autoplay></video>
+    <canvas id="canvas" width="640" height="480"></canvas>
+    <p id="countdown">เตรียมมือให้พร้อม...</p>
+    <p id="player-choice">กำลังรอมือของคุณ...</p>
+    <p id="computer-choice">คอมพิวเตอร์เลือก: -</p>
+    <p id="result-box"></p>
+    <button id="restart-button" onclick="restartGame()">เริ่มใหม่</button>
+
+    <script>
+        let choices = ["✊", "✋", "✌️"];
+        let lastDetected = null;
+        let confirmFrames = 0;
+        let detectedHand = false;
+        let gameStarted = false;
+        let countdownTimer = 3;
+
+        async function runHandTracking() {
+            const video = document.getElementById("video");
+            const canvas = document.getElementById("canvas");
+            const ctx = canvas.getContext("2d");
+
+            navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
+                video.srcObject = stream;
+            });
+
+            const model = await handpose.load();
+            startCountdown();
+
+            async function detect() {
+                const predictions = await model.estimateHands(video);
+
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                detectedHand = predictions.length > 0;
+
+                if (detectedHand && countdownTimer <= 0) {
+                    const landmarks = predictions[0].landmarks;
+                    drawHand(ctx, landmarks);
+                    let choice = detectHandGesture(landmarks);
+
+                    if (choice !== null) {
+                        if (choice === lastDetected) {
+                            confirmFrames++;
+                        } else {
+                            confirmFrames = 0;
+                        }
+                        lastDetected = choice;
+
+                        if (confirmFrames > 15 && !gameStarted) { 
+                            gameStarted = true;
+                            playGame(choice);
+                        }
+                    }
+                }
+
+                requestAnimationFrame(detect);
+            }
+
+            detect();
+        }
+
+        function drawHand(ctx, landmarks) {
+            ctx.strokeStyle = "red";
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            for (let i = 0; i < landmarks.length; i++) {
+                const [x, y] = landmarks[i];
+                ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        }
+
+        function detectHandGesture(landmarks) {
+            let fingers = [
+                landmarks[8][1] < landmarks[6][1],  
+                landmarks[12][1] < landmarks[10][1], 
+                landmarks[16][1] < landmarks[14][1], 
+                landmarks[20][1] < landmarks[18][1]
+            ];
+            let thumb = landmarks[4][1] < landmarks[3][1];
+
+            let count = fingers.filter(Boolean).length + (thumb ? 1 : 0);
+
+            if (count === 0) return "✊"; 
+            if (count === 5) return "✋"; 
+            if (count === 2) return "✌️"; 
+
+            return null;
+        }
+
+        function playGame(playerChoice) {
+            let computerChoice = choices[Math.floor(Math.random() * choices.length)];
+            document.getElementById("player-choice").innerText = `คุณเลือก: ${playerChoice}`;
+            document.getElementById("computer-choice").innerText = `คอมพิวเตอร์เลือก: ${computerChoice}`;
+            
+            let result = determineWinner(playerChoice, computerChoice);
+            document.getElementById("result-box").innerText = result;
+
+            sendGameResult(playerChoice, computerChoice, result);
+        }
+
+        function determineWinner(player, computer) {
+            if (player === computer) return "เสมอ!";
+            if (
+                (player === "✊" && computer === "✌️") || 
+                (player === "✋" && computer === "✊") || 
+                (player === "✌️" && computer === "✋")
+            ) {
+                return "คุณชนะ! 🎉";
+            } else {
+                return "คุณแพ้! 😢";
+            }
+        }
+
+        function sendGameResult(playerChoice, computerChoice, result) {
+            google.script.run.withSuccessHandler((response) => {
+                console.log(response);
+            }).saveGameResult(playerChoice, computerChoice, result);
+        }
+
+        function startCountdown() {
+            let countdownElement = document.getElementById("countdown");
+            countdownElement.innerText = `เตรียมมือให้พร้อม...`;
+
+            let interval = setInterval(() => {
+                if (countdownTimer > 0) {
+                    countdownElement.innerText = `เริ่มใน ${countdownTimer} วินาที`;
+                    countdownTimer--;
+                } else {
+                    clearInterval(interval);
+                    countdownElement.innerText = "เริ่มจับมือ!";
+                }
+            }, 1000);
+        }
+
+        function restartGame() {
+            gameStarted = false;
+            countdownTimer = 3;
+            lastDetected = null;
+            confirmFrames = 0;
+            document.getElementById("countdown").innerText = "เตรียมมือให้พร้อม...";
+            document.getElementById("player-choice").innerText = "กำลังรอมือของคุณ...";
+            document.getElementById("computer-choice").innerText = "คอมพิวเตอร์เลือก: -";
+            document.getElementById("result-box").innerText = "";
+            startCountdown();
+        }
+
+        runHandTracking();
+    </script>
+</body>
+</html>
